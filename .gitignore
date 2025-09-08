@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.dist/
+.build/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# IDE / OS
+.DS_Store
+.vscode/
+
+# Project artifacts
+outputs/
+data/
+# Docker
+.dockerignore

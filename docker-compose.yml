@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  wildfire:
+    image: wildfire-pl:cpu
+    # Keep the container alive without running your app
+    entrypoint: ["/bin/sh", "-lc", "sleep infinity"]
+    working_dir: /app
+    volumes:
+      - ./:/app
+    tty: true
+    stdin_open: true
+  pipeline:   # runs your CLI
+    image: wildfire-pl:cpu
+    # Dockerfile’s ENTRYPOINT is "python run.py", so pass only args:
+    command: ["--aoi", "Lake_Oswego_OR", "--out", "outputs"]
+    volumes: [ "./outputs:/app/outputs" ]
