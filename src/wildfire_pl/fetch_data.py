@@ -1,19 +1,21 @@
 from pathlib import Path
 import time
 import random
-from shapely.geometry import box, mapping
+from shapely.geometry import box, shape, mapping
 from shapely.ops import transform as shp_transform
 from pystac_client import Client
 from pystac_client.exceptions import APIError
 import planetary_computer as pc
 import rasterio
 import rasterio.mask
+from rasterio.warp import transform_geom, transform_bounds
 from pyproj import Transformer
-from typing import Any,Dict
+from typing import Any, Dict
 from collections.abc import Iterable
 import requests
 import geopandas as gpd
 from shapely.geometry import LineString
+
 
 def search_naip(aoi_bbox, limit=10):
     minx, miny, maxx, maxy = aoi_bbox
@@ -27,22 +29,40 @@ def search_naip(aoi_bbox, limit=10):
     )
     return search, AOI
 
+
 def _clip_one(href, AOI_wgs84, out_tif):
+    """Robust clip using rasterio.warp instead of shapely.buffer()."""
     with rasterio.open(href) as src:
-        to_raster = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True).transform
-        aoi_r = shp_transform(to_raster, AOI_wgs84).buffer(0)
+        # 1) Quick reject in WGS84: project raster bounds -> 4326 and test against AOI (also 4326)
+        rb_wgs84 = transform_bounds(src.crs, "EPSG:4326", *src.bounds, densify_pts=21)
+        if not box(*rb_wgs84).intersects(AOI_wgs84):
+            return False
+
+        # 2) Reproject the AOI geometry into the raster CRS (GDAL/PROJ does it; no shapely buffer)
+        aoi_r_geojson = transform_geom(
+            "EPSG:4326", src.crs.to_string(), mapping(AOI_wgs84), precision=6
+        )
+        aoi_r = shape(aoi_r_geojson)
+
+        # 3) If numeric jitter still misses, expand the AOI **bounds** by one pixel (in raster units)
         if not aoi_r.intersects(box(*src.bounds)):
-            pad = max(abs(src.res[0]), abs(src.res[1]))
-            aoi_r = aoi_r.buffer(pad)
+            pix = float(max(abs(src.res[0]), abs(src.res[1])))
+            x0, y0, x1, y1 = aoi_r.bounds
+            aoi_r = box(x0 - pix, y0 - pix, x1 + pix, y1 + pix)
+            aoi_r_geojson = mapping(aoi_r)
             if not aoi_r.intersects(box(*src.bounds)):
                 return False
-        img, T = rasterio.mask.mask(src, [aoi_r.__geo_interface__], crop=True)
+
+        # 4) Clip
+        img, T = rasterio.mask.mask(src, [aoi_r_geojson], crop=True)
         meta = src.meta.copy()
         meta.update(height=img.shape[1], width=img.shape[2], transform=T)
+
     out_tif.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(out_tif, "w", **meta) as dst:
         dst.write(img)
     return True
+
 
 def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries=5, base_sleep=1.5):
     """Find a NAIP item that intersects AOI and write clipped TIFF. Retries on STAC 5xx errors."""
@@ -68,18 +88,32 @@ def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries=5, base_sleep=1.5):
             status = getattr(e, "status_code", None)
             if status is not None and 500 <= status < 600:
                 sleep = base_sleep * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-                print(f"[NAIP] STAC {status} on attempt {attempt}/{max_tries}; retrying in {sleep:.1f}s...")
+                print(
+                    f"[NAIP] STAC {status} on attempt {attempt}/{max_tries}; retrying in {sleep:.1f}s..."
+                )
                 time.sleep(sleep)
                 continue
             # non-retryable error
             raise
     # exhausted retries
-    raise RuntimeError(f"Planetary Computer STAC failed after {max_tries} tries: {last_err}")
+    raise RuntimeError(
+        f"Planetary Computer STAC failed after {max_tries} tries: {last_err}"
+    )
+
 
 DEFAULT_HIGHWAY_CLASSES = [
-    "motorway","trunk","primary","secondary","tertiary",
-    "motorway_link","trunk_link","primary_link","secondary_link","tertiary_link"
+    "motorway",
+    "trunk",
+    "primary",
+    "secondary",
+    "tertiary",
+    "motorway_link",
+    "trunk_link",
+    "primary_link",
+    "secondary_link",
+    "tertiary_link",
 ]
+
 
 def fetch_highways(
     aoi_bbox: tuple[float, float, float, float],
@@ -113,10 +147,12 @@ def fetch_highways(
         if el.get("type") == "way" and "geometry" in el:
             coords = [(pt["lon"], pt["lat"]) for pt in el["geometry"]]
             if len(coords) >= 2:
-                feats.append({
-                    "geometry": LineString(coords),
-                    "highway": el.get("tags", {}).get("highway")
-                })
+                feats.append(
+                    {
+                        "geometry": LineString(coords),
+                        "highway": el.get("tags", {}).get("highway"),
+                    }
+                )
 
     roads = gpd.GeoDataFrame(feats, crs=4326)
     if roads.empty:

@@ -1,16 +1,18 @@
-version: "3.9"
+name: wildfire_powerlines
+
 services:
   wildfire:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: wildfire-pl:cpu
-    # Keep the container alive without running your app
-    entrypoint: ["/bin/sh", "-lc", "sleep infinity"]
-    working_dir: /app
+    working_dir: /code
     volumes:
-      - ./:/app
-    tty: true
+      - .:/code
+    environment:
+      - GEOPANDAS_IO_ENGINE=pyogrio
+      - PROJ_NETWORK=ON
+      - NO_ALBUMENTATIONS_UPDATE=1
+    entrypoint: ["/bin/sh","-lc","sleep infinity"]
     stdin_open: true
-  pipeline:   # runs your CLI
-    image: wildfire-pl:cpu
-    # Dockerfile’s ENTRYPOINT is "python run.py", so pass only args:
-    command: ["--aoi", "Lake_Oswego_OR", "--out", "outputs"]
-    volumes: [ "./outputs:/app/outputs" ]
+    tty: true
