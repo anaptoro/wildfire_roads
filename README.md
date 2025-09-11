@@ -14,13 +14,13 @@ This repo provides an **end-to-end workflow** to:
 ## Quick start (Docker)
 
 **Requirements:** Docker & Docker Compose v2
+
 **Usage**
-###Build and start the image
+### Build and start the image
 
 docker build -t wildfire-pl:cpu .
 
-###Example usage:
-
+(Example usage)
 docker compose exec wildfire \
   python run.py --bbox -122.676 45.412 -122.666 45.422 --out outputs_small_east
 
