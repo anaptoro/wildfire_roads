@@ -16,9 +16,10 @@ This repo provides an **end-to-end workflow** to:
 **Requirements:** Docker & Docker Compose v2
 
 ### 1) Build and start the image
-```bash
+
 docker build -t wildfire-pl:cpu .
 
-docker compose up -d wildfire
+###Example usage:
 
-### 1) Run the command
+docker compose exec wildfire \
+  python run.py --bbox -122.676 45.412 -122.666 45.422 --out outputs_small_east

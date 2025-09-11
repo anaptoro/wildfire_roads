@@ -149,6 +149,7 @@ def cli(
             seg_len_m=50.0,
             buf_m=15.0,
         )
+        
         risk_map_html = folium_risk_map(aoi_bbox, spans_gdf, out_dir / "risk_map.html")
 
     _echo("[6/6] Saving overlay PNG", quiet)
