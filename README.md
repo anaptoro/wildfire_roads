@@ -33,3 +33,25 @@ docker compose exec wildfire \
 - risk_map_html: html file with the risk
 
 ## Methodology
+
+### Crown identification
+The crown identification was performed using the DeepForest model, which uses Pytorch, that was not trained on NAIP imagery, so the performance for NAIP wont be excellent, just enough for a first analysis.
+
+There is a config file (config.py) for model calibration if needed
+
+### Highways fetching
+The fetched highways came from OpenStreet map, depending on the region many roads can be missing (a good opportunity to contribute for OSM btw).
+
+### Risk calculation
+The risk is calculated by overlapping the identified tree crowns with a buffered vector of the existing highways. After that this equation is used:
+
+Risk per pixel is computed as a weighted blend of proximity to the nearest road and crown density—specifically 
+risk=(1−crown_weight)⋅𝑃 + crown_weight⋅(𝑃⋅𝐷), where 𝑃 is an exponential distance‐decay from buffered roads (half-life = decay_half_m) and 𝐷 is a blurred, normalized raster of tree crowns (0-1).
+
+
+### Use cases and caveats
+
+This pipeline can be used for a quick overview of wildfire risk near to roads, it can be modified for powerline risk and any other feature available in OSM. 
+
+This pipeline contain many caveats that can be addressed for more specific approaches, e.g. the fact that it currently only works with NAIP images, and the risk equation can probably have many more variables.
+
