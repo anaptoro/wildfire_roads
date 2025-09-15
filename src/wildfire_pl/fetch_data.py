@@ -1,23 +1,33 @@
+# src/wildfire_pl/fetch_data.py
+from __future__ import annotations
+
 from pathlib import Path
 import time
 import random
-from shapely.geometry import box, shape, mapping
-from shapely.ops import transform as shp_transform
-from pystac_client import Client
-from pystac_client.exceptions import APIError
-import planetary_computer as pc
+from typing import Any, Dict
+
+import requests
+import geopandas as gpd
 import rasterio
 import rasterio.mask
 from rasterio.warp import transform_geom, transform_bounds
-from pyproj import Transformer
-from typing import Any, Dict
+from shapely.geometry import box, shape, mapping, LineString
 from collections.abc import Iterable
-import requests
-import geopandas as gpd
-from shapely.geometry import LineString
+
+from pystac_client import Client
+from pystac_client.exceptions import APIError
+import planetary_computer as pc
+
+# write GPKG via pyogrio (avoids Fiona/GDAL hangs in containers)
+from pyogrio import write_dataframe
 
 
-def search_naip(aoi_bbox, limit=10):
+# -------------------------
+# NAIP search + clipping
+# -------------------------
+
+def search_naip(aoi_bbox, limit: int = 10):
+    """Return (search, AOI polygon) for NAIP over the given bbox (EPSG:4326)."""
     minx, miny, maxx, maxy = aoi_bbox
     AOI = box(minx, miny, maxx, maxy)
     stac = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1")
@@ -30,29 +40,29 @@ def search_naip(aoi_bbox, limit=10):
     return search, AOI
 
 
-def _clip_one(href, AOI_wgs84, out_tif):
-    """Robust clip using rasterio.warp instead of shapely.buffer()."""
+def _clip_one(href: str, AOI_wgs84, out_tif: Path) -> bool:
+    """Robust clip using rasterio.warp reproject (no shapely buffering in projected space)."""
     with rasterio.open(href) as src:
-        # 1) Quick reject in WGS84: project raster bounds -> 4326 and test against AOI (also 4326)
+        # 1) Quick reject: reproject raster bounds → EPSG:4326 and test against AOI
         rb_wgs84 = transform_bounds(src.crs, "EPSG:4326", *src.bounds, densify_pts=21)
         if not box(*rb_wgs84).intersects(AOI_wgs84):
             return False
 
-        # 2) Reproject the AOI geometry into the raster CRS (GDAL/PROJ does it; no shapely buffer)
+        # 2) Reproject AOI into raster CRS via GDAL/PROJ (precise, stable)
         aoi_r_geojson = transform_geom(
             "EPSG:4326", src.crs.to_string(), mapping(AOI_wgs84), precision=6
         )
         aoi_r = shape(aoi_r_geojson)
 
-        # 3) If numeric jitter still misses, expand the AOI **bounds** by one pixel (in raster units)
+        # 3) If floating-point jitter misses by a hair, expand AOI by ~1 pixel in raster units
         if not aoi_r.intersects(box(*src.bounds)):
             pix = float(max(abs(src.res[0]), abs(src.res[1])))
-            aoi_r = aoi_r.buffer(pix)  # preserve shape instead of bounding-box expand
+            aoi_r = aoi_r.buffer(pix)           # preserve shape (vs expanding bbox)
             aoi_r_geojson = mapping(aoi_r)
             if not aoi_r.intersects(box(*src.bounds)):
                 return False
 
-        # 4) Clip
+        # 4) Clip and write
         img, T = rasterio.mask.mask(src, [aoi_r_geojson], crop=True)
         meta = src.meta.copy()
         meta.update(height=img.shape[1], width=img.shape[2], transform=T)
@@ -63,23 +73,18 @@ def _clip_one(href, AOI_wgs84, out_tif):
     return True
 
 
-def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries=5, base_sleep=1.5):
+def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries: int = 5, base_sleep: float = 1.5) -> Path:
+    """Find a NAIP item that intersects AOI and write clipped TIFF. Retries on STAC 5xx errors."""
     out_dir = Path(out_dir)
     out_tif = out_dir / "naip_aoi.tif"
     if out_tif.exists():
         return out_tif
 
-    AOI = box(*aoi_bbox)
+    search, AOI = search_naip(aoi_bbox, limit=10)
     last_err = None
     for attempt in range(1, max_tries + 1):
         try:
-            stac = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1")
-            search = stac.search(
-                collections=["naip"],
-                intersects=mapping(AOI),
-                sortby=[{"field": "datetime", "direction": "desc"}],
-                limit=10,
-            )
+            # Iterate most recent items first
             for item in search.items():
                 href = pc.sign(item).assets["image"].href
                 if _clip_one(href, AOI, out_tif):
@@ -97,17 +102,13 @@ def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries=5, base_sleep=1.5):
     raise RuntimeError(f"Planetary Computer STAC failed after {max_tries} tries: {last_err}")
 
 
+# -------------------------
+# OSM highways via Overpass
+# -------------------------
+
 DEFAULT_HIGHWAY_CLASSES = [
-    "motorway",
-    "trunk",
-    "primary",
-    "secondary",
-    "tertiary",
-    "motorway_link",
-    "trunk_link",
-    "primary_link",
-    "secondary_link",
-    "tertiary_link",
+    "motorway", "trunk", "primary", "secondary", "tertiary",
+    "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
 ]
 
 
@@ -118,7 +119,11 @@ def fetch_highways(
     classes: Iterable[str] | None = None,
     buffer_m: float = 30.0,
 ) -> Path:
-    """Fetch OSM highways in bbox, reproject to raster CRS, buffer, and save GPKG (layers: lines, lines_buffer)."""
+    """
+    Fetch OSM highways in bbox, reproject to raster CRS, buffer, and save GPKG (layers: lines, lines_buffer).
+
+    Uses pyogrio to write GPKG to avoid Fiona/GDAL hangs in containers.
+    """
     classes = list(classes or DEFAULT_HIGHWAY_CLASSES)
 
     # Overpass bbox order: south, west, north, east
@@ -134,7 +139,17 @@ def fetch_highways(
     out tags geom;
     """
 
-    resp = requests.post("https://overpass-api.de/api/interpreter", data={"data": q})
+    # Robust request (no silent hangs), and friendly UA
+    headers = {
+        "User-Agent": "wildfire_pl/0.1 (contact: you@example.com)",
+        "Accept": "application/json",
+    }
+    resp = requests.post(
+        "https://overpass-api.de/api/interpreter",
+        data={"data": q},
+        headers=headers,
+        timeout=(10, 120),   # 10s connect, 120s read
+    )
     resp.raise_for_status()
     data: Dict[str, Any] = resp.json()
 
@@ -143,12 +158,10 @@ def fetch_highways(
         if el.get("type") == "way" and "geometry" in el:
             coords = [(pt["lon"], pt["lat"]) for pt in el["geometry"]]
             if len(coords) >= 2:
-                feats.append(
-                    {
-                        "geometry": LineString(coords),
-                        "highway": el.get("tags", {}).get("highway"),
-                    }
-                )
+                feats.append({
+                    "geometry": LineString(coords),
+                    "highway": el.get("tags", {}).get("highway"),
+                })
 
     roads = gpd.GeoDataFrame(feats, crs=4326)
     if roads.empty:
@@ -156,16 +169,18 @@ def fetch_highways(
 
     # Reproject to raster CRS and buffer in meters
     with rasterio.open(raster_tif) as src:
-        roads_proj = roads.to_crs(src.crs)
+        dst_crs = src.crs
+    roads_proj = roads.to_crs(dst_crs)
 
     roads_buf = roads_proj.copy()
     roads_buf["geometry"] = roads_proj.geometry.buffer(buffer_m)
 
-    # Ensure proper path object and create parent dir
+    # Ensure path exists
     out_gpkg = Path(out_gpkg)
     out_gpkg.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write layers
-    roads_proj.to_file(out_gpkg, layer="lines", driver="GPKG")
-    roads_buf.to_file(out_gpkg, layer="lines_buffer", driver="GPKG")
+    # Write using pyogrio (fast, reliable in containers)
+    write_dataframe(roads_proj, out_gpkg, layer="lines", driver="GPKG")
+    write_dataframe(roads_buf, out_gpkg, layer="lines_buffer", driver="GPKG")
+
     return out_gpkg
