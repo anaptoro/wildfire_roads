@@ -1,31 +1,30 @@
+# Dockerfile
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    NO_ALBUMENTATIONS_UPDATE=1 \
-    PROJ_NETWORK=ON \
-    GEOPANDAS_IO_ENGINE=pyogrio
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /code
 
-# System geospatial stack from Debian (avoids compiling GDAL bindings)
+# OS deps (GDAL runtime, RTree, and a couple of harmless GLib libs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates build-essential \
     gdal-bin libgdal-dev \
-    python3-rasterio python3-fiona python3-geopandas \
-    python3-pyproj python3-rtree python3-shapely python3-pyogrio \
-    python3-pyparsing \
+    libspatialindex-dev \
+    libgl1 libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /code
-
-# Python deps (everything except the geo stack above)
+# Copy lock files first for better layer caching
 COPY requirements.txt constraints.txt ./
-RUN python -m pip install -U pip setuptools wheel && \
-    python -m pip install --no-cache-dir -r requirements.txt -c constraints.txt \
-      --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Your app
+# Install: prevent supervision from dragging in opencv-python,
+# then install your requirements, and finally force headless cv2.
+RUN python -m pip install -U pip setuptools wheel && \
+    python -m pip install --no-cache-dir --no-deps supervision==0.26.1 && \
+    python -m pip install --no-cache-dir -r requirements.txt -c constraints.txt && \
+    python -m pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless==4.12.0.88
+
+# App code
 COPY src ./src
 COPY run.py README.md ./
 
-# Idle by default; use `docker compose exec` to run jobs
-CMD ["/bin/sh","-lc","sleep infinity"]
+# Default command (optional)
+CMD ["python", "run.py", "--help"]

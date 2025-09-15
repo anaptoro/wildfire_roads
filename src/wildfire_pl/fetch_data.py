@@ -47,8 +47,7 @@ def _clip_one(href, AOI_wgs84, out_tif):
         # 3) If numeric jitter still misses, expand the AOI **bounds** by one pixel (in raster units)
         if not aoi_r.intersects(box(*src.bounds)):
             pix = float(max(abs(src.res[0]), abs(src.res[1])))
-            x0, y0, x1, y1 = aoi_r.bounds
-            aoi_r = box(x0 - pix, y0 - pix, x1 + pix, y1 + pix)
+            aoi_r = aoi_r.buffer(pix)  # preserve shape instead of bounding-box expand
             aoi_r_geojson = mapping(aoi_r)
             if not aoi_r.intersects(box(*src.bounds)):
                 return False
@@ -65,18 +64,22 @@ def _clip_one(href, AOI_wgs84, out_tif):
 
 
 def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries=5, base_sleep=1.5):
-    """Find a NAIP item that intersects AOI and write clipped TIFF. Retries on STAC 5xx errors."""
     out_dir = Path(out_dir)
     out_tif = out_dir / "naip_aoi.tif"
-    # skip if we already have it
     if out_tif.exists():
         return out_tif
 
-    search, AOI = search_naip(aoi_bbox, limit=10)
+    AOI = box(*aoi_bbox)
     last_err = None
     for attempt in range(1, max_tries + 1):
         try:
-            # NOTE: use .items() (get_items is deprecated)
+            stac = Client.open("https://planetarycomputer.microsoft.com/api/stac/v1")
+            search = stac.search(
+                collections=["naip"],
+                intersects=mapping(AOI),
+                sortby=[{"field": "datetime", "direction": "desc"}],
+                limit=10,
+            )
             for item in search.items():
                 href = pc.sign(item).assets["image"].href
                 if _clip_one(href, AOI, out_tif):
@@ -84,21 +87,14 @@ def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries=5, base_sleep=1.5):
             raise RuntimeError("No NAIP item intersected the AOI.")
         except APIError as e:
             last_err = e
-            # Retry only for server-side problems (5xx)
             status = getattr(e, "status_code", None)
             if status is not None and 500 <= status < 600:
                 sleep = base_sleep * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-                print(
-                    f"[NAIP] STAC {status} on attempt {attempt}/{max_tries}; retrying in {sleep:.1f}s..."
-                )
+                print(f"[NAIP] STAC {status} on attempt {attempt}/{max_tries}; retrying in {sleep:.1f}s...")
                 time.sleep(sleep)
                 continue
-            # non-retryable error
             raise
-    # exhausted retries
-    raise RuntimeError(
-        f"Planetary Computer STAC failed after {max_tries} tries: {last_err}"
-    )
+    raise RuntimeError(f"Planetary Computer STAC failed after {max_tries} tries: {last_err}")
 
 
 DEFAULT_HIGHWAY_CLASSES = [
