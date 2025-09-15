@@ -22,9 +22,6 @@ import branca.colormap as cm
 from shapely.geometry import mapping as shp_mapping
 
 
-# ---------------------------
-# Utilities
-# ---------------------------
 def _stretch_rgb(arr, p=(2, 98)):
     arr = arr.astype(np.float32)
     out = np.zeros_like(arr, dtype=np.uint8)
@@ -85,9 +82,6 @@ def _poly_mean(arr: np.ndarray, transform, geom):
     return float(np.nanmean(vals)) if vals.size else np.nan
 
 
-# ---------------------------
-# Worker (MUST be module-scope to pickle on macOS/Windows)
-# ---------------------------
 def _tile_reduce(args):
     import numpy as _np
     import rasterio as _rio
@@ -248,7 +242,6 @@ def risk_spans_from_raster(
     def log(msg: str):
         print(msg, flush=True, file=sys.stdout)
 
-    # Compatibility helper: return **indices** of STRtree hits for both Shapely 1.8.x and 2.x
     def _query_idxs(
         tree: STRtree, geom, backing_geoms: list[BaseGeometry]
     ) -> np.ndarray:
@@ -299,7 +292,6 @@ def risk_spans_from_raster(
     labels = spans["_lbl"].to_numpy(dtype=np.int32)
     N = len(buf_geoms)
 
-    # --- risk source (tif or memmapped npy) ---
     risk_source = {"mode": None, "path": None}
     if risk_tif is not None:
         risk_source.update(mode="tif", path=str(risk_tif))
@@ -324,7 +316,6 @@ def risk_spans_from_raster(
         del risk
         risk_source.update(mode="npy", path=risk_npy)
 
-    # --- build tile tasks (use STRtree indices; pass mapped geoms) ---
     tree = STRtree(buf_geoms)
     TILE = 2048 if max(H, W) > 6000 else 4096
     tiles = []
@@ -363,7 +354,6 @@ def risk_spans_from_raster(
         f"[risk] size: {W}x{H}px (~{(W * H) / 1e6:.1f} MP)  spans: {N}  tiles(with work): {len(tiles)}"
     )
 
-    # --- parallel over tiles ---
     sums = np.zeros(N + 1, dtype=np.float64)
     cnts = np.zeros(N + 1, dtype=np.int64)
     if n_workers is None:
@@ -435,7 +425,6 @@ def risk_spans_from_raster(
 
     spans["crowns_near"] = crowns_near
 
-    # --- ranking ---
     spans["crowns_per_100m"] = (
         spans["crowns_near"] / (spans["span_length_m"].clip(lower=1) / 100.0)
     ).astype("float32")
@@ -449,7 +438,6 @@ def risk_spans_from_raster(
     )
     spans.reset_index(drop=True, inplace=True)
 
-    # --- save ---
     out_gpkg = Path(out_gpkg)
     out_gpkg.parent.mkdir(parents=True, exist_ok=True)
     spans.to_file(out_gpkg, layer="risk_spans", driver="GPKG")

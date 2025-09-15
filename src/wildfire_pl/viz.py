@@ -4,7 +4,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.plot import reshape_as_image
 
-# Force non-interactive backend for containers/servers
+
 import matplotlib
 
 matplotlib.use("Agg")

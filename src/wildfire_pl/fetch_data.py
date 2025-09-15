@@ -18,13 +18,14 @@ from pystac_client import Client
 from pystac_client.exceptions import APIError
 import planetary_computer as pc
 
-# write GPKG via pyogrio (avoids Fiona/GDAL hangs in containers)
+
 from pyogrio import write_dataframe
 
 
 # -------------------------
 # NAIP search + clipping
 # -------------------------
+
 
 def search_naip(aoi_bbox, limit: int = 10):
     """Return (search, AOI polygon) for NAIP over the given bbox (EPSG:4326)."""
@@ -57,7 +58,7 @@ def _clip_one(href: str, AOI_wgs84, out_tif: Path) -> bool:
         # 3) If floating-point jitter misses by a hair, expand AOI by ~1 pixel in raster units
         if not aoi_r.intersects(box(*src.bounds)):
             pix = float(max(abs(src.res[0]), abs(src.res[1])))
-            aoi_r = aoi_r.buffer(pix)           # preserve shape (vs expanding bbox)
+            aoi_r = aoi_r.buffer(pix)  # preserve shape (vs expanding bbox)
             aoi_r_geojson = mapping(aoi_r)
             if not aoi_r.intersects(box(*src.bounds)):
                 return False
@@ -73,7 +74,9 @@ def _clip_one(href: str, AOI_wgs84, out_tif: Path) -> bool:
     return True
 
 
-def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries: int = 5, base_sleep: float = 1.5) -> Path:
+def fetch_and_clip_naip(
+    aoi_bbox, out_dir, max_tries: int = 5, base_sleep: float = 1.5
+) -> Path:
     """Find a NAIP item that intersects AOI and write clipped TIFF. Retries on STAC 5xx errors."""
     out_dir = Path(out_dir)
     out_tif = out_dir / "naip_aoi.tif"
@@ -95,11 +98,15 @@ def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries: int = 5, base_sleep: float
             status = getattr(e, "status_code", None)
             if status is not None and 500 <= status < 600:
                 sleep = base_sleep * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-                print(f"[NAIP] STAC {status} on attempt {attempt}/{max_tries}; retrying in {sleep:.1f}s...")
+                print(
+                    f"[NAIP] STAC {status} on attempt {attempt}/{max_tries}; retrying in {sleep:.1f}s..."
+                )
                 time.sleep(sleep)
                 continue
             raise
-    raise RuntimeError(f"Planetary Computer STAC failed after {max_tries} tries: {last_err}")
+    raise RuntimeError(
+        f"Planetary Computer STAC failed after {max_tries} tries: {last_err}"
+    )
 
 
 # -------------------------
@@ -107,8 +114,16 @@ def fetch_and_clip_naip(aoi_bbox, out_dir, max_tries: int = 5, base_sleep: float
 # -------------------------
 
 DEFAULT_HIGHWAY_CLASSES = [
-    "motorway", "trunk", "primary", "secondary", "tertiary",
-    "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
+    "motorway",
+    "trunk",
+    "primary",
+    "secondary",
+    "tertiary",
+    "motorway_link",
+    "trunk_link",
+    "primary_link",
+    "secondary_link",
+    "tertiary_link",
 ]
 
 
@@ -148,7 +163,7 @@ def fetch_highways(
         "https://overpass-api.de/api/interpreter",
         data={"data": q},
         headers=headers,
-        timeout=(10, 120),   # 10s connect, 120s read
+        timeout=(10, 120),  # 10s connect, 120s read
     )
     resp.raise_for_status()
     data: Dict[str, Any] = resp.json()
@@ -158,10 +173,12 @@ def fetch_highways(
         if el.get("type") == "way" and "geometry" in el:
             coords = [(pt["lon"], pt["lat"]) for pt in el["geometry"]]
             if len(coords) >= 2:
-                feats.append({
-                    "geometry": LineString(coords),
-                    "highway": el.get("tags", {}).get("highway"),
-                })
+                feats.append(
+                    {
+                        "geometry": LineString(coords),
+                        "highway": el.get("tags", {}).get("highway"),
+                    }
+                )
 
     roads = gpd.GeoDataFrame(feats, crs=4326)
     if roads.empty:
