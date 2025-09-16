@@ -26,6 +26,9 @@ docker compose exec wildfire \
   python run.py --bbox -122.676 45.412 -122.666 45.422 --out outputs_small_east
 
 ## Expected outputs
+
+Example outputs can be found into the output_small_east folder
+
 - naip_tif for the selected bbox
 - crowns_gpkg: Identified crowns gpkg,
 - roads_gpkg: Identified roads gpkg,
