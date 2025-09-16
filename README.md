@@ -18,7 +18,9 @@ This repo provides an **end-to-end workflow** to:
 **Usage**
 ### Build and start the image
 
-docker build -t wildfire-pl:cpu .
+docker compose build wildfire
+
+docker compose up -d wildfire
 
 (Example usage)
 
